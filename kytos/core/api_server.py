@@ -25,16 +25,20 @@ class APIServer:
     _CORE_PREFIX = "/api/kytos/core/"
 
     def __init__(self, app_name, listen='0.0.0.0', port=8181,
-                 napps_dir=None):
+                 controller=None):
         """Start a Flask+SocketIO server.
+        Require controller to get NApps dir, NAppsManager
 
         Args:
             app_name(string): String representing a App Name
             listen (string): host name used by api server instance
             port (int): Port number used by api server instance
-            napps_dir(string): napps path directory
+            controller(kytos.core.controller): A controller instance.
         """
         dirname = os.path.dirname(os.path.abspath(__file__))
+        self.nappsManager = controller.napps_manager
+        self.napps_dir = controller.options.napps
+
         self.flask_dir = os.path.join(dirname, '../web-ui')
         self.log = logging.getLogger('api_server')
 
@@ -53,7 +57,6 @@ class APIServer:
 
         # Update web-ui if necessary
         self.update_web_ui(force=False)
-        self.napps_dir = napps_dir
 
     def _enable_websocket_rooms(self):
         socket = self.server
@@ -275,6 +278,11 @@ class APIServer:
                 absolute_rule = self.get_absolute_rule(rule, napp)
                 self._start_endpoint(absolute_rule, function, **options)
 
+        # Register endpoint to enable this NApp
+        self.register_enable_napp(napp)
+        # Register endpoint to disable this NApp
+        self.register_disable_napp(napp)
+
     @staticmethod
     def _get_decorated_functions(napp):
         """Return ``napp``'s methods having the @rest decorator."""
@@ -332,3 +340,51 @@ class APIServer:
             # pylint: enable=protected-access
 
         self.log.info('The Rest endpoints from %s were disabled.', prefix)
+
+    def register_enable_napp(self, napp):
+        rule = "enable/<{napp.username}>/<{napp.name}>/".format(napp=napp)
+        rule = "enable/<username>/<napp_name>/"
+
+        self.register_core_endpoint(rule, self._enable_napp)
+
+    def _enable_napp(self, username, napp_name):
+        # Check if the NApp is installed
+        if self.nappsManager.is_installed(username, napp_name):
+            # Check if the NApp is already been enabled
+            if not self.nappsManager.is_enabled(username, napp_name):
+                self.nappsManager.enable(username, napp_name)
+
+            # Check if NApp is enabled
+            if self.nappsManager.is_enabled(username, napp_name):
+                return '{"response": "enabled"}', 200
+            else:
+                # If it is not enabled an admin user must check the log file
+                return '{"response": "error"}', 500
+
+        else:
+            return '{"response": "not installed"}', 400
+
+    def register_disable_napp(self, napp):
+        rule = "disable/<{napp.username}>/<{napp.name}>/".format(napp=napp)
+        rule = "disable/<username>/<napp_name>/"
+
+        self.register_core_endpoint(rule, self._disable_napp)
+
+    def _disable_napp(self, username, napp_name):
+        # Check if the NApp is installed
+        if self.nappsManager.is_installed(username, napp_name):
+            # Check if the NApp is enabled
+            if self.nappsManager.is_enabled(username, napp_name):
+                self.nappsManager.disable(username, napp_name)
+
+            # Check if NApp is still enabled
+            if self.nappsManager.is_enabled(username, napp_name):
+                # If it is still enabled an admin user must check the log file
+                return '{"response": "error"}', 500
+            else:
+                return '{"response": "disabled"}', 200
+        else:
+            return '{"response": "not installed"}', 400
+
+
+
